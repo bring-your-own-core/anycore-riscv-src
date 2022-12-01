@@ -38,6 +38,8 @@ module FetchStage1(
 `ifdef INST_CACHE
     output [`ICACHE_BLOCK_ADDR_BITS-1:0]ic2memReqAddr_o,     // memory read address
     output                           ic2memReqValid_o,     // memory read enable
+    output [1:0]                     ic2memReqWay_o,
+
     input  [`ICACHE_TAG_BITS-1:0]    mem2icTag_i,          // tag of the incoming data
     input  [`ICACHE_INDEX_BITS-1:0]  mem2icIndex_i,        // index of the incoming data
     input  [`ICACHE_BITS_IN_LINE-1:0]   mem2icData_i,         // requested data
@@ -45,7 +47,7 @@ module FetchStage1(
 
     input                            mem2icInv_i,          // icache invalidation
     input  [`ICACHE_INDEX_BITS-1:0]  mem2icInvInd_i,       // icache invalidation index
-    input  [0:0]                     mem2icInvWay_i,       // icache invalidation way (unused)
+    input  [1:0]                     mem2icInvWay_i,       // icache invalidation way (unused)
 
     input                            icScratchModeEn_i,    // Should ideally be disabled by default
     input [`ICACHE_INDEX_BITS+`ICACHE_BYTES_IN_LINE_LOG-1:0]  icScratchWrAddr_i,
@@ -330,6 +332,7 @@ L1ICache l1icache(
 `ifdef INST_CACHE
     .ic2memReqAddr_o      (ic2memReqAddr_o     ),     // memory read address
     .ic2memReqValid_o     (ic2memReqValid_o    ),     // memory read enable
+    .ic2memReqWay_o       (ic2memReqWay_o      ),
     .mem2icTag_i          (mem2icTag_i         ),     // tag of the incoming data
     .mem2icIndex_i        (mem2icIndex_i       ),     // index of the incoming data
     .mem2icData_i         (mem2icData_i        ),     // requested data
