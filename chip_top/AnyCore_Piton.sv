@@ -103,6 +103,7 @@ module AnyCore_Piton(
 
 wire [`ICACHE_BLOCK_ADDR_BITS-1:0] ic2memReqAddr;    // memory read address
 wire                               ic2memReqValid;   // memory read enable
+wire  [`ICACHE_NUM_WAYS_LOG-1:0]                        ic2memReqWay;     // memory way 
 wire [`ICACHE_TAG_BITS-1:0]        mem2icTag;        // tag of the incoming data
 wire [`ICACHE_INDEX_BITS-1:0]      mem2icIndex;      // index of the incoming data
 wire [`ICACHE_BITS_IN_LINE-1:0]    mem2icData;       // requested data
@@ -110,7 +111,7 @@ wire                               mem2icRespValid;  // requested data is ready
 
 wire                               mem2icInv;        // icache invalidation
 wire  [`ICACHE_INDEX_BITS-1:0]     mem2icInvInd;     // icache invalidation index
-wire  [0:0]                        mem2icInvWay;     // icache invalidation way (unused)
+wire  [`ICACHE_NUM_WAYS_LOG-1:0]                        mem2icInvWay;     // icache invalidation way (unused)
 
 // cache-to-memory interface for Loads
 wire [`DCACHE_BLOCK_ADDR_BITS-1:0] dc2memLdAddr;  // memory read address
@@ -448,6 +449,7 @@ Core_OOO coreTop(
   `ifdef INST_CACHE
     .ic2memReqAddr_o                     (ic2memReqAddr  ),      // memory read address
     .ic2memReqValid_o                    (ic2memReqValid ),     // memory read enable
+    .ic2memReqWay_o                      (ic2memReqWay),
     .mem2icTag_i                         (mem2icTag      ),          // tag of the incoming data
     .mem2icIndex_i                       (mem2icIndex    ),        // index of the incoming data
     .mem2icData_i                        (mem2icData     ),         // requested data
@@ -586,6 +588,7 @@ Core_OOO coreTop(
 //`endif
 
 
+    //DO WE EVEN NEED TO ADD STUFF HERE?
     // not supported at the moment
     assign transducer_l15_amo_op = `L15_AMO_OP_NONE;
     anycore_tri_transducer tri_transducer(
@@ -597,6 +600,7 @@ Core_OOO coreTop(
 
         .ic2mem_reqaddr_i                  (ic2memReqAddr),
         .ic2mem_reqvalid_i                 (ic2memReqValid),
+        .ic2memReqWay_o                    (ic2memReqWay),
 
         .dc2mem_ldaddr_i                   (dc2memLdAddr),
         .dc2mem_ldvalid_i                  (dc2memLdValid),
