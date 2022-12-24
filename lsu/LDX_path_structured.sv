@@ -40,6 +40,7 @@ module LDX_path_structured (
   // cache-to-memory interface for Loads
   output [`DCACHE_BLOCK_ADDR_BITS-1:0] dc2memLdAddr_o,  // memory read address
   output reg                          dc2memLdValid_o, // memory read enable
+  output [1:0]  dc2memReqWay_o,
 
   // memory-to-cache interface for Loads
   input  [`DCACHE_TAG_BITS-1:0]       mem2dcLdTag_i,       // tag of the incoming datadetermine
@@ -55,7 +56,7 @@ module LDX_path_structured (
 
   input                               mem2dcInv_i,     // dcache invalidation
   input  [`DCACHE_INDEX_BITS-1:0]     mem2dcInvInd_i,  // dcache invalidation index
-  input  [0:0]                        mem2dcInvWay_i,  // dcache invalidation way (unused)
+  input  [1:0]                        mem2dcInvWay_i,  // dcache invalidation way (unused)
 
   // memory-to-cache interface for stores
   input                               mem2dcStComplete_i,
@@ -189,6 +190,7 @@ L1DataCache L1dCache (
  
   .dc2memLdAddr_o             (dc2memLdAddr_o     ), // memory read address
   .dc2memLdValid_o            (dc2memLdValid_o    ), // memory read enable
+  .dc2memReqWay_o    		  (dc2memReqWay_o     ),
                                                  
   .mem2dcLdTag_i              (mem2dcLdTag_i      ), // tag of the incoming datadetermine
   .mem2dcLdIndex_i            (mem2dcLdIndex_i    ), // index of the incoming data
@@ -202,7 +204,7 @@ L1DataCache L1dCache (
                                                  
   .mem2dcInv_i,     // dcache invalidation
   .mem2dcInvInd_i,  // dcache invalidation index
-  .mem2dcInvWay_i,  // dcache invalidation way (unusedndex
+  .mem2dcInvWay_i    		  (mem2dcInvWay_i    ),
 
   .mem2dcStComplete_i         (mem2dcStComplete_i ),
   .mem2dcStStall_i            (mem2dcStStall_i    ),

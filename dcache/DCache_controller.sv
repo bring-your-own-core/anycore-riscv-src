@@ -42,6 +42,10 @@ module DCache_controller(
     input  [`SIZE_DATA-1:0]             stData_i, 
     //input  [2**`DCACHE_WORD_BYTE_OFFSET_LOG-1:0]stByteEn_i, 
     output                              stHit_o,
+    output                              stHit_o1,
+    output                              stHit_o2,
+    output                              stHit_o3,
+    output                              stHit_total,
 
 `ifdef DATA_CACHE
     // cache-to-memory interface for Loads
@@ -54,6 +58,8 @@ module DCache_controller(
     input  [`DCACHE_BITS_IN_LINE-1:0]   mem2dcLdData_i,  // requested data
     input                               mem2dcLdValid_i, // indicates the requested data is ready
 
+    output logic [1:0]  dc2memReqWay_o,
+
     // cache-to-memory interface for stores
     output [`DCACHE_ST_ADDR_BITS-1:0]   dc2memStAddr_o,  // memory read address
     output [`SIZE_DATA-1:0]             dc2memStData_o,  // memory read address
@@ -62,7 +68,7 @@ module DCache_controller(
 
     input                               mem2dcInv_i,     // dcache invalidation
     input  [`DCACHE_INDEX_BITS-1:0]     mem2dcInvInd_i,  // dcache invalidation index
-    input  [0:0]                        mem2dcInvWay_i,  // dcache invalidation way (unused)
+    input  [1:0]                        mem2dcInvWay_i,  // dcache invalidation way (unused)
 
     output                              stbEmpty_o,      // Signals that there are no pending stores to be written to next level
 
@@ -109,6 +115,9 @@ module DCache_controller(
   logic                                 dcScratchWrEn_d1;
   logic                                 mem2dcStComplete_d1;
   logic [`DCACHE_BITS_IN_LINE-1:0]      mem2dcLdData_d1;  // requested data
+  logic [`ICACHE_NUM_WAYS_LOG-1:0]      RoundRobin [`ICACHE_NUM_LINES-1:0];
+  int misses = 0;
+  int hits = 0;
 
   always_ff @(posedge clk or posedge reset)
   begin
@@ -140,7 +149,12 @@ module DCache_controller(
   logic [`DCACHE_INDEX_BITS-1:0]     ld_index_reg;
   logic [`DCACHE_TAG_BITS-1:0]       ld_tag_reg;
   logic                              ldEn_reg;
+  //duplicated this data
   logic [`SIZE_DATA-1:0]             ldData;
+  logic [`SIZE_DATA-1:0]             ldData1;
+  logic [`SIZE_DATA-1:0]             ldData2;
+  logic [`SIZE_DATA-1:0]             ldData3;
+  logic [`SIZE_DATA-1:0]             ldData_from_hit;   // Maps to whichever ldData corresponds to a hit
 
   // store pc segments /////////////////////////////////////////////
   logic [`DCACHE_OFFSET_BITS-1:0]    st_offset;
@@ -188,11 +202,35 @@ module DCache_controller(
   logic [`DCACHE_TAG_BITS-1:0]    ld_cache_tag;
   logic [`DCACHE_BITS_IN_LINE-1:0]ld_cache_data;
   logic                           ld_cache_valid;
+
+  logic [`DCACHE_TAG_BITS-1:0]    ld_cache_tag1;
+  logic [`DCACHE_BITS_IN_LINE-1:0]ld_cache_data1;
+  logic                           ld_cache_valid1;
+
+  logic [`DCACHE_TAG_BITS-1:0]    ld_cache_tag2;
+  logic [`DCACHE_BITS_IN_LINE-1:0]ld_cache_data2;
+  logic                           ld_cache_valid2;
+
+  logic [`DCACHE_TAG_BITS-1:0]    ld_cache_tag3;
+  logic [`DCACHE_BITS_IN_LINE-1:0]ld_cache_data3;
+  logic                           ld_cache_valid3;
   
   // hit detection logic. hits are detected the cycle after ldEn_i goes high.
   // hit can stay high for multiple cycles if no new request comes (e.g. fetch
   // stalls)
+
+  // CS 254:
+  // Erwan: Do we need to duplicate this data as well? Did that for now but can change it back.
+  // Rajan: Makes sense to me, since we want to separately check if each way has a hit
+  //        when doing loads
   logic                           ldHit;
+  logic                           ldHit1 = 0;
+  logic                           ldHit2 = 0;
+  logic                           ldHit3 = 0;
+  logic                           ldHit_total;
+
+  assign ldHit_total = ldHit | ldHit1 | ldHit2 | ldHit3;
+  assign ldMiss = ~ldHit_total;
   
   
   // Muxing might be needed to account for the differing load sizes
@@ -202,38 +240,63 @@ module DCache_controller(
     //ldData_o = 32'hdeadbeef;
     // Consider it as a miss if a partial hit in STB. Being conservative
     // whenever a size mismatch is observed.
-    ldDataValid_o = ldHit & ~stbPartialHit; 
-    ldHit_o = ldHit & ~stbPartialHit;
+    ldDataValid_o = ldHit_total & ~stbPartialHit; 
+    ldHit_o = ldHit_total & ~stbPartialHit;
   
   	case (ldSize_i)
   		`LDST_BYTE: 
        		begin
-			ldData_o = (ldData >> {ldAddr_i[2:0], 3'h0}) & 64'h0000_0000_0000_00FF;
+			ldData_o = (ldData_from_hit >> {ldAddr_i[2:0], 3'h0}) & 64'h0000_0000_0000_00FF;
   			if(ldSign_i)
          		 	ldData_o = {{56{ldData_o[7]}},ldData_o[7:0]};
        		end
   		`LDST_HALF_WORD: 
       		begin
-			ldData_o = (ldData >> {ldAddr_i[2:1], 4'h0}) & 64'h0000_0000_0000_FFFF;
+			ldData_o = (ldData_from_hit >> {ldAddr_i[2:1], 4'h0}) & 64'h0000_0000_0000_FFFF;
 			if(ldSign_i)
           			ldData_o = {{48{ldData_o[15]}},ldData_o[15:0]};
 		end
   
   		`LDST_WORD:
   		begin
-			ldData_o = (ldData >> {ldAddr_i[2], 5'h0}) & 64'h0000_0000_FFFF_FFFF;
+			ldData_o = (ldData_from_hit >> {ldAddr_i[2], 5'h0}) & 64'h0000_0000_FFFF_FFFF;
 			 if(ldSign_i)
           			ldData_o = {{32{ldData_o[31]}},ldData_o[31:0]};
 
 		end
 
 		`LDST_DOUBLE_WORD:
-			ldData_o = ldData;
+			ldData_o = ldData_from_hit;
   	endcase
   
     // If trying to access heap region
 //  	if (ldAddr_i[31])
 //  		ldData_o = 32'hdeadbeef;
+  end
+
+  always_ff @(posedge clk)
+  begin
+    if (reset) 
+    begin
+      int i;
+      for (i = 0; i < `ICACHE_NUM_LINES; i++) 
+      begin
+        RoundRobin[i] <= '0;
+      end
+    end 
+    else if (ldMiss | stMiss_o)
+    begin
+        int i;
+        misses <= misses + 1;
+        $display("MISSES (dcache): %d", misses);
+        RoundRobin[ld_index] <= RoundRobin[ld_index] + 1'b1;
+    end   
+    else if (ldHit_total) 
+    begin
+      int i;
+      hits <= hits + 1;
+      $display("HITS (dcache): %d", hits);
+    end
   end
   
   
@@ -265,9 +328,9 @@ module DCache_controller(
   logic                               miss_pulse;
   logic                               missUnderMiss;
   
-  assign miss = ~ldHit;
+  assign miss = ~ldHit_total;
 
-  assign ldMiss_o = miss & ldEn_i; 
+  assign ldMiss_o = miss & ldEn_i;
   
   always_ff @(posedge clk or posedge reset)
   begin
@@ -426,13 +489,27 @@ module DCache_controller(
   end
   
   ////////////////////////////////////////////////////////////
-
+  //duplicated the logic here.
   logic [`DCACHE_TAG_BITS-1:0]      st_cache_tag;
   logic [`DCACHE_BITS_IN_LINE-1:0]  st_cache_data;
   logic                             st_cache_valid;
+  logic [`DCACHE_TAG_BITS-1:0]      st_cache_tag1;
+  logic [`DCACHE_BITS_IN_LINE-1:0]  st_cache_data1;
+  logic                             st_cache_valid1;
+  logic [`DCACHE_TAG_BITS-1:0]      st_cache_tag2;
+  logic [`DCACHE_BITS_IN_LINE-1:0]  st_cache_data2;
+  logic                             st_cache_valid2;
+  logic [`DCACHE_TAG_BITS-1:0]      st_cache_tag3;
+  logic [`DCACHE_BITS_IN_LINE-1:0]  st_cache_data3;
+  logic                             st_cache_valid3;
+  logic [`DCACHE_BITS_IN_LINE-1:0]  st_cache_data_from_hit;
   logic [`DCACHE_BITS_IN_LINE-1:0]  stbUpdateData;
   
   logic                             stHit;
+  logic                             stHit1;
+  logic                             stHit2;
+  logic                             stHit3;
+  logic                             stHit_total;
 
   // the unregistered index is for reading the tag/data array
   assign st_offset                = stAddr_i[`DCACHE_OFFSET_BITS+`DCACHE_WORD_BYTE_OFFSET_LOG-1 : `DCACHE_WORD_BYTE_OFFSET_LOG];
@@ -512,8 +589,11 @@ module DCache_controller(
   //    makes sure of a future hit.
   
   assign  stHit_o = stHit;
+  assign  stHit_o1 = stHit1;
+  assign  stHit_o2 = stHit2;
+  assign  stHit_o3 = stHit3;
 
-  assign  stMiss_o = ~stHit & mem2dcStComplete_d1;
+  assign  stMiss_o = ~stHit_total & mem2dcStComplete_d1;
   
   assign dc2memStAddr_o        = st_addr_reg;
   assign dc2memStData_o        = piton_stData_reg;
@@ -667,26 +747,67 @@ module DCache_controller(
   end   
   ////////////////////////////////////////////////////////////
   
-  
+  // (CS 254)
+  // Erwan: Do I need to duplicate this data? maybe store the ld data depending on the way of a hit or something?
+  // Rajan: Whichever ldData gets selected to be the cache's output should depend on the input way
   assign ldData = stbHit ? stbData[latestMatch] : ld_cache_data[ld_offset*`SIZE_DATA +: `SIZE_DATA];
+  assign ldData1 = stbHit ? stbData[latestMatch] : ld_cache_data1[ld_offset*`SIZE_DATA +: `SIZE_DATA];
+  assign ldData2 = stbHit ? stbData[latestMatch] : ld_cache_data2[ld_offset*`SIZE_DATA +: `SIZE_DATA];
+  assign ldData3 = stbHit ? stbData[latestMatch] : ld_cache_data3[ld_offset*`SIZE_DATA +: `SIZE_DATA];
   
   /* Cache data and tag arrays */
   reg [`DCACHE_BITS_IN_LINE-1:0]                      data_array [`DCACHE_NUM_LINES-1:0];
   reg [`DCACHE_TAG_BITS-1:0]                          tag_array [`DCACHE_NUM_LINES-1:0];
   reg [`DCACHE_NUM_LINES-1:0]                         valid_array;
+
+  reg [`DCACHE_BITS_IN_LINE-1:0]                      data_array1 [`DCACHE_NUM_LINES-1:0];
+  reg [`DCACHE_TAG_BITS-1:0]                          tag_array1 [`DCACHE_NUM_LINES-1:0];
+  reg [`DCACHE_NUM_LINES-1:0]                         valid_array1;
+
+  reg [`DCACHE_BITS_IN_LINE-1:0]                      data_array2 [`DCACHE_NUM_LINES-1:0];
+  reg [`DCACHE_TAG_BITS-1:0]                          tag_array2 [`DCACHE_NUM_LINES-1:0];
+  reg [`DCACHE_NUM_LINES-1:0]                         valid_array2;
+
+  reg [`DCACHE_BITS_IN_LINE-1:0]                      data_array3 [`DCACHE_NUM_LINES-1:0];
+  reg [`DCACHE_TAG_BITS-1:0]                          tag_array3 [`DCACHE_NUM_LINES-1:0];
+  reg [`DCACHE_NUM_LINES-1:0]                         valid_array3;
   
   
   always_comb
   begin
+    dc2memReqWay_o = RoundRobin[ld_index];
+
+    // (CS 254) Although it seems like we would want to switch based on
+    // the invWay coming in, we actually need to compute all 4 sets of
+    // data below. After all, if there isn't a hit, the data for that
+    // way won't get updated anyway.
     ld_cache_data  = data_array[ld_index];
     ld_cache_tag   = tag_array[ld_index];
     ld_cache_valid = valid_array[ld_index];
+
+    ld_cache_data1  = data_array1[ld_index];
+    ld_cache_tag1   = tag_array1[ld_index];
+    ld_cache_valid1 = valid_array1[ld_index];
+
+    ld_cache_data2  = data_array2[ld_index];
+    ld_cache_tag2   = tag_array2[ld_index];
+    ld_cache_valid2 = valid_array2[ld_index];
+
+    ld_cache_data3  = data_array3[ld_index];
+    ld_cache_tag3   = tag_array3[ld_index];
+    ld_cache_valid3 = valid_array3[ld_index];
   end
   
   always_comb
   begin
     // If hit in store buffer, ignore the cache array hit as STB has latest value.
     // If hit in store buffer, it is a miss if the sizes are not compatible.
+    
+    // CS 254
+    // Erwan: Scratch mode so won't modify the ldHit stuff in here for now, is this necessary?
+    //        it seems that apart from being assigned to the miss and being declared this is the only spot 
+    //        where ldHit is being used so does it need to be duplicated at all?
+    // Rajan: We don't need to worry about associativity during scratch mode, so we can leave it.
     ldHit = 1'b0;
     // NOTE: SCRATCH MODE
     if(dcScratchModeEn_d1)
@@ -694,28 +815,92 @@ module DCache_controller(
     else
     begin
       if(stbHit)
+      begin
+        // (CS 254) When there's a store buffer hit, the cache isn't used, so we don't
+        //          need to duplicate this
         ldHit = (ldSize_i <= stbStSize[latestMatch]) & ldEn_i;  // Must indicate ldHit only when there's a valid ldEn
+      end
       else
-        ldHit = (ld_cache_tag == ld_tag) & ld_cache_valid & ldEn_i; 
+      begin
+        // (CS 254) Duplicated ldHit logic here.
+        ldHit = (ld_cache_tag == ld_tag) & ld_cache_valid & ldEn_i;
+        ldHit1 = (ld_cache_tag1 == ld_tag) & ld_cache_valid1 & ldEn_i;
+        ldHit2 = (ld_cache_tag2 == ld_tag) & ld_cache_valid2 & ldEn_i;
+        ldHit3 = (ld_cache_tag3 == ld_tag) & ld_cache_valid3 & ldEn_i;
+      end
     end
   end
   
+  always_comb
+  begin
+    // This will be the data that gets output from the cache. Each ldData<i> corresponds to a way
+    // and each hit<i> is true when that way has a hit (based on the tag)
+    ldData_from_hit = ldHit ? ldData : ldHit1 ? ldData1 : ldHit2 ? ldData2 : ldHit3 ? ldData3 : ldData;
+  end
   
   always_ff @(posedge clk)
   begin
     // No need to update to a line that is being replaced 
     // by a fill.
+
+    // CS 254:
+    // Erwan: Duplicated logic here based on stHit
+    // should I duplicate more logic here apart from stHit and data_array?
+    // Rajan: No need.
     if(stHit & ~((stbHeadIndex == fillIndex) & fillValid))
     begin
       data_array[stbHeadIndex]  <=  stbUpdateData;
     end
+    else if(stHit1 & ~((stbHeadIndex == fillIndex) & fillValid))
+    begin
+      data_array1[stbHeadIndex]  <=  stbUpdateData;
+    end
+    else if(stHit2 & ~((stbHeadIndex == fillIndex) & fillValid))
+    begin
+      data_array2[stbHeadIndex]  <=  stbUpdateData;
+    end
+    else if(stHit3 & ~((stbHeadIndex == fillIndex) & fillValid))
+    begin
+      data_array3[stbHeadIndex]  <=  stbUpdateData;
+    end
 
+
+    // CS 254: Brought over from icache controller
+    if (reset)
+    begin
+      int i;
+      for(i = 0; i < `DCACHE_NUM_LINES; i++)
+      begin
+        data_array[i] <= 0;
+        data_array1[i] <= 0;
+        data_array2[i] <= 0;
+        data_array3[i] <= 0;
+      end
+    end
     // Fill to the same line gets priority over store update
     // as the block being stored to is being overwritten anyway.
-    if(fillValid)
+    else if(fillValid)
     begin
-      data_array[fillIndex]   <=  fillData;
-      tag_array[fillIndex]    <=  fillTag;
+      if (mem2dcInvWay_i == 2'b00)
+      begin
+        data_array[fillIndex]   <=  fillData;
+        tag_array[fillIndex]    <=  fillTag;
+      end
+      else if (mem2dcInvWay_i == 2'b01)
+      begin
+        data_array1[fillIndex]   <=  fillData;
+        tag_array1[fillIndex]    <=  fillTag;
+      end
+      else if (mem2dcInvWay_i == 2'b10)
+      begin
+        data_array2[fillIndex]   <=  fillData;
+        tag_array2[fillIndex]    <=  fillTag;
+      end
+      else if (mem2dcInvWay_i == 2'b11)
+      begin
+        data_array3[fillIndex]   <=  fillData;
+        tag_array3[fillIndex]    <=  fillTag;
+      end
     end
     // Load scratch pad from outside
     else if(dcScratchWrEn_d1 & dcScratchModeEn_d1)
@@ -727,27 +912,67 @@ module DCache_controller(
   // Reading the bytes through the SCRATCH interface
   assign dcScratchRdData_o  = data_array[dcScratchWrIndex_d1][(dcScratchWrByte_d1*8) +: 8];
 
-
+  //basically copied what we had from the icache controller here, I'm assuming its not much different
   always_ff @(posedge clk or posedge reset)
   begin
     int i;
     if(reset)
     begin
       for(i = 0; i < `DCACHE_NUM_LINES;i++)
+      begin
         valid_array[i] <= 1'b0;
+        valid_array1[i] <= 1'b0;
+        valid_array2[i] <= 1'b0;
+        valid_array3[i] <= 1'b0;
+      end
     end
     else if(dcFlush_i)
     begin
       for(i = 0; i < `DCACHE_NUM_LINES;i++)
-          valid_array[i] <= 1'b0;
+      begin
+        valid_array[i] <= 1'b0;
+        valid_array1[i] <= 1'b0;
+        valid_array2[i] <= 1'b0;
+        valid_array3[i] <= 1'b0;
+      end
     end
     else if(mem2dcInv_i)
     begin
-      valid_array[mem2dcInvInd_i] <= 1'b0;
+      if (mem2dcInvWay_i == 2'b00)
+      begin
+        valid_array[mem2dcInvInd_i] <= 1'b0;
+      end
+      else if (mem2dcInvWay_i == 2'b01)
+      begin
+        valid_array1[mem2dcInvInd_i] <= 1'b0;
+      end
+      else if (mem2dcInvWay_i == 2'b10)
+      begin
+        valid_array2[mem2dcInvInd_i] <= 1'b0;
+      end
+      else if (mem2dcInvWay_i == 2'b11)
+      begin
+        valid_array3[mem2dcInvInd_i] <= 1'b0;
+      end
     end
     else if(fillValid)
     begin
-      valid_array[fillIndex] <= 1'b1;
+      if (mem2dcInvWay_i == 2'b00)
+      begin
+        valid_array[fillIndex] <= 1'b1;
+      end
+      else if (mem2dcInvWay_i == 2'b01)
+      begin
+        valid_array1[fillIndex] <= 1'b1;
+      end
+      else if (mem2dcInvWay_i == 2'b10)
+      begin
+        valid_array2[fillIndex] <= 1'b1;
+      end
+      else if (mem2dcInvWay_i == 2'b11)
+      begin
+        valid_array3[fillIndex] <= 1'b1;
+      end
     end
   end
 
@@ -771,16 +996,34 @@ module DCache_controller(
     st_cache_data  = data_array[stbHeadIndex];
     st_cache_tag   = tag_array[stbHeadIndex];
     st_cache_valid = valid_array[stbHeadIndex];
+
+    st_cache_data1  = data_array1[stbHeadIndex];
+    st_cache_tag1   = tag_array1[stbHeadIndex];
+    st_cache_valid1 = valid_array1[stbHeadIndex];
+
+    st_cache_data2  = data_array2[stbHeadIndex];
+    st_cache_tag2   = tag_array2[stbHeadIndex];
+    st_cache_valid2 = valid_array2[stbHeadIndex];
+
+    st_cache_data3  = data_array3[stbHeadIndex];
+    st_cache_tag3   = tag_array3[stbHeadIndex];
+    st_cache_valid3 = valid_array3[stbHeadIndex];
   end
   
   // NOTE: SCRATCH MODE
   // If in scratch mode, store hits whenever there is a store to be done.
   assign stHit = dcScratchModeEn_d1 ? stEn_i : (((st_cache_tag == stbHeadTag) & st_cache_valid) & mem2dcStComplete_d1);
+  assign stHit1 = dcScratchModeEn_d1 ? stEn_i : (((st_cache_tag1 == stbHeadTag) & st_cache_valid1) & mem2dcStComplete_d1);
+  assign stHit2 = dcScratchModeEn_d1 ? stEn_i : (((st_cache_tag2 == stbHeadTag) & st_cache_valid2) & mem2dcStComplete_d1);
+  assign stHit3 = dcScratchModeEn_d1 ? stEn_i : (((st_cache_tag3 == stbHeadTag) & st_cache_valid3) & mem2dcStComplete_d1);
+  assign stHit_total = stHit | stHit1 | stHit2 | stHit3;
+  assign st_cache_data_from_hit = stHit ? st_cache_data : stHit1 ? st_cache_data1 : stHit2 ? st_cache_data2 : stHit3 ? st_cache_data3 : st_cache_data;
  
   always_comb
   begin
+      //Most likely also need to add some logic here?
       int i,j;
-      stbUpdateData = st_cache_data;
+      stbUpdateData = st_cache_data_from_hit;
       
       // Merge received data with the latest store data byte by byte
       for(i=0;i<`DCACHE_WORDS_IN_LINE;i++)

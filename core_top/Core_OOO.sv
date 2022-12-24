@@ -54,6 +54,8 @@ module Core_OOO(
 `ifdef INST_CACHE
   output [`ICACHE_BLOCK_ADDR_BITS-1:0]ic2memReqAddr_o,      // memory read address
   output                              ic2memReqValid_o,     // memory read enable
+  output [`ICACHE_NUM_WAYS_LOG-1:0]  					  ic2memReqWay_o,
+
   input  [`ICACHE_TAG_BITS-1:0]       mem2icTag_i,          // tag of the incoming data
   input  [`ICACHE_INDEX_BITS-1:0]     mem2icIndex_i,        // index of the incoming data
   input  [`ICACHE_BITS_IN_LINE-1:0]   mem2icData_i,         // requested data
@@ -61,7 +63,7 @@ module Core_OOO(
 
   input                               mem2icInv_i,          // icache invalidation
   input  [`ICACHE_INDEX_BITS-1:0]     mem2icInvInd_i,       // icache invalidation index
-  input  [0:0]                        mem2icInvWay_i,       // icache invalidation way (unused)
+  input  [`ICACHE_NUM_WAYS_LOG-1:0]                        mem2icInvWay_i,       // icache invalidation way (unused)
 
   //input                               instCacheBypass_i,
   input                               icScratchModeEn_i,    // Should ideally be disabled by default
@@ -78,6 +80,7 @@ module Core_OOO(
   // cache-to-memory interface for Loads
   output [`DCACHE_BLOCK_ADDR_BITS-1:0]dc2memLdAddr_o,  // memory read address
   output reg                          dc2memLdValid_o, // memory read enable
+  output [1:0]  dc2memReqWay_o,
 
   // memory-to-cache interface for Loads
   input  [`DCACHE_TAG_BITS-1:0]       mem2dcLdTag_i,       // tag of the incoming datadetermine
@@ -93,7 +96,7 @@ module Core_OOO(
 
   input                               mem2dcInv_i,     // dcache invalidation
   input  [`DCACHE_INDEX_BITS-1:0]     mem2dcInvInd_i,  // dcache invalidation index
-  input  [0:0]                        mem2dcInvWay_i,  // dcache invalidation way (unused)
+  input  [1:0]                        mem2dcInvWay_i,  // dcache invalidation way (unused)
 
   // memory-to-cache interface for stores
   input                               mem2dcStComplete_i,
@@ -501,6 +504,7 @@ FetchStage1 fs1(
 `ifdef INST_CACHE
   .ic2memReqAddr_o      (ic2memReqAddr_o     ),      // memory read address
   .ic2memReqValid_o     (ic2memReqValid_o    ),     // memory read enable
+  .ic2memReqWay_o       (ic2memReqWay_o      ),
   .mem2icTag_i          (mem2icTag_i         ),          // tag of the incoming data
   .mem2icIndex_i        (mem2icIndex_i       ),        // index of the incoming data
   .mem2icData_i         (mem2icData_i        ),         // requested data
@@ -1608,6 +1612,7 @@ LSU lsu (
 
   .dc2memLdAddr_o       (dc2memLdAddr_o     ), // memory read address
   .dc2memLdValid_o      (dc2memLdValid_o    ), // memory read enable
+  .dc2memReqWay_o       (dc2memReqWay_o     ),
                                            
   .mem2dcLdTag_i        (mem2dcLdTag_i      ), // tag of the incoming datadetermine
   .mem2dcLdIndex_i      (mem2dcLdIndex_i    ), // index of the incoming data
@@ -1621,7 +1626,7 @@ LSU lsu (
                                            
   .mem2dcInv_i,     // dcache invalidation
   .mem2dcInvInd_i,  // dcache invalidation index
-  .mem2dcInvWay_i,  // dcache invalidation way (unusedndex
+  .mem2dcInvWay_i     	(mem2dcInvWay_i		),
 
   .mem2dcStComplete_i   (mem2dcStComplete_i ),
   .mem2dcStStall_i      (mem2dcStStall_i    ),
